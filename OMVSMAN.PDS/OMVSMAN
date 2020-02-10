@@ -1,0 +1,1071 @@
+/* --------------------  rexx procedure  -------------------- */
+ ver = '2.0'
+/* Name:      OMVSMAN                                         *
+ *                                                            *
+ * Function:  Present the user with a table of available      *
+ *            omvs man pages from which the user may select   *
+ *            to browse.                                      *
+ *                                                            *
+ *            This is done by using the command: man -k .     *
+ *                                                            *
+ * To Enable MAN pages:                                       *
+ * Copy from EPH.SEPHSAMP(EPHWP00) to SYS1.PARMLIB and        *
+ * change the DSN=EPH.SEPHTAB to match your installations     *
+ * high level qualifier for these datasets on your sysres.    *
+ *                                                            *
+ * Syntax:    %OMVSMAN cmd                                    *
+ *                                                            *
+ *            cmd is optional and if provided that will       *
+ *            be the only man page to be displayed.           *
+ *                                                            *
+ * Usage:     Best used when added to the site ISPF           *
+ *            command table:                                  *
+ *                                                            *
+ *            Verb:   man                                     *
+ *            T:      0                                       *
+ *            Action: select cmd(%omvsman &zparm)             *
+ *                                                            *
+ *            Then the user can enter:  man xxx               *
+ *                                 or:  man                   *
+ *                                                            *
+ * Commands:  Locate manpage                                  *
+ *                                                            *
+ *            Refresh                                         *
+ *            - to rebuild the list of all commands           *
+ *                                                            *
+ *            Search string                                   *
+ *            - to rebuild the list of commands by searching  *
+ *              for the string in all man pages               *
+ *              - issues man -k string                        *
+ *            - alias Find                                    *
+ *                                                            *
+ * Author:    Lionel B. Dyck                                  *
+ *                                                            *
+ * History:                                                   *
+ *            11/07/18 - 2.0 Cosmetic - add comments around   *
+ *                           inline section                   *
+ *            02/28/18 - 2.0 Change tbend to tbclose          *
+ *            07/31/17 - 1.9 Panel Scrolling cleanup          *
+ *            07/27/17 - 1.8 Panel width cleanup              *
+ *            07/20/17 - 1.7 Make mandesc scrollable          *
+ *            07/19/17 - 1.6 Add customized browse/view       *
+ *                       panels to have customized title      *
+ *                     - Enable entry with a manpage that is  *
+ *                       a tcsh manpage                       *
+ *            07/07/17 - 1.5 Correct panel and add skip(on)   *
+ *            06/20/17 - 1.4 Formatting cleanup               *
+ *            06/19/17 - 1.3 Enhance/cleanup                  *
+ *                     - Add tcsh flag to tbcreate and remove *
+ *                       the '*' flag in description          *
+ *            06/17/17 - 1.2 Bug fix for uconvdef.            *
+ *                     - Support tcsh commands.               *
+ *                     - Thanks to Ken Tomiak                 *
+ *            06/16/17 - 1.1 Bug fix for continued page names *
+ *            06/16/17 - 1.1 Bug fix for continued page names *
+ *            06/16/17 - 1.0 GA release                       *
+ *                     - Clean up parse of man results        *
+ *                     - Add locate                           *
+ *                     - panel width in the )body             *
+ *            06/15/17 - Clean up and add Search/Refresh      *
+ *                     - Remove STEMEDIT                      *
+ *                     - Fix point and shoot for row          *
+ *                     - Fix multi-line page names            *
+ *                     - Add new ISPF Message                 *
+ *            06/14/17 - Updated to have a table of pages     *
+ *            07/08/16 - Handle null records from man         *
+ *            07/08/16 - Creation                             *
+ *                                                            *
+ * ---------------------------------------------------------- */
+
+/* --------------- *
+ | define defaults |
+ * --------------- */
+  parse value '' with null load_info just_man
+
+/* --------------------- *
+ | Load ISPF Panels/etc. |
+ * --------------------- */
+  load_info = loadispf()
+
+/* ----------------------- *
+ * Get the passed manpage *
+ * ----------------------- */
+  parse arg manpage
+  if manpage /= null then do
+    just_man = 1
+    call do_it
+    call done
+  end
+
+/* ---------------------------------------- *
+ | Build and Display the table of man pages |
+ * ---------------------------------------- */
+  Address ISPExec
+  mansearch = 'man -k .'
+  call build_list
+  ztdsels = 0
+  src = 0
+  rowcrp = 0
+  crp = 1
+  table_panel = OMVSMAN
+  do forever
+    zcmd = null
+    zsel = null
+    if ztdsels > 0 then src = 4
+    if src = 4 then "TBDispl" mantable
+    else do
+      "TBTOP" mantable
+      "TBSKIP" mantable "NUMBER("crp")"
+      if rowcrp = 0 then
+         "TBDISPL" mantable "PANEL("table_panel")"
+      else
+         "TBDISPL" mantable "PANEL("table_panel")",
+                  "CSRROW("rowcrp") AUTOSEL(NO)"
+    end
+    src = rc
+    crp = ztdtop
+    if rc > 4 then do
+      'tbclose' mantable
+      leave
+    end
+
+    if datatype(row) /= 'NUM' then row = 0
+    if row /= 0 then do
+      ssel = zsel
+      "TBTOP" mantable
+      "TBSKIP" mantable "NUMBER("row")"
+      zsel = ssel
+    end
+
+    if zcmd /= null then do
+      if abbrev('FIND',translate(word(zcmd,1)),1) = 1 then do
+        parse value zcmd with x rest
+        zcmd = 'S' rest
+      end
+      Select
+        When abbrev('LOCATE',translate(word(zcmd,1)),1) = 1 then do
+          srchmpage = word(zcmd,2)
+          srchmpage = translate(srchmpage,"abcdefghijklmnopqrstuvwxyz", ,
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+          if srchmpage = null then do
+            smsg = 'Invalid'
+            lmsg = 'No man page provided'
+            'Setmsg msg(oman001)'
+          end
+          else do forever
+            'tbskip' mantable 'rowid(newcrp)'
+            if rc > 0 then do
+              'tbtop' mantable
+              leave
+            end
+            if manpage >= srchmpage then do
+              crp = newcrp
+              smsg = 'Located'
+              lmsg = srchmpage 'located'
+              'Setmsg msg(oman001)'
+              leave
+            end
+          end
+        end
+        When abbrev('REFRESH',translate(word(zcmd,1)),1) = 1 then do
+          'tbclose' mantable
+          mansearch = 'man -k .'
+          call build_list
+        end
+        When abbrev('SEARCH',translate(word(zcmd,1)),1) = 1 then do
+          search = subword(zcmd,2)
+          'tbclose' mantable
+          mansearch = 'man -k' search
+          call build_list
+        end
+        Otherwise do
+          smsg = 'Unknown'
+          lmsg = word(zcmd,1) 'is an unknown command.'
+          'Setmsg msg(oman001)'
+        end
+      end
+    end
+    if zsel /= null then do
+      if tcsh = 1 then
+         manpage = "tcsh"Strip(manpage,"T","*")
+      call do_it
+    end
+  end
+
+/* -------------------------- *
+ | Done so clean up and leave |
+ * -------------------------- */
+ Done:
+  Address ISPEXEC
+  do until length(load_info) = 0
+    parse value load_info with dd libd load_info
+    if left(libd,6) = "ALTLIB" then do
+      if libd = "ALTLIBC"
+         then lib = "CLIST"
+         else lib = "EXEC"
+      Address TSO,
+        "Altlib Deact Application("lib")"
+    end
+    else "libdef" libd
+    Address TSO "free f("dd")"
+  end
+  exit
+
+/* ---------------------------------------- *
+ | Build the list of available man pages by |
+ | executing the command:  man -k .         |
+ * ---------------------------------------- */
+build_list:
+  rc = bpxwunix(mansearch,,stdout.,stderr.)
+  if rc < 0 then signal no_unix
+  mantable = 'man'random(999)
+  'tbcreate' mantable 'keys(manpage) names(mandesc tcsh)' ,
+    'replace share nowrite'
+  do i = 1 to stdout.0
+    Select
+      When Index(stdout.i," - ") > 1 then
+      Parse Var stdout.i  manpage " - " mandesc
+      When Length(stdout.i) = 1 then iterate
+      When Index(stdout.i," - ") = 0 then
+      Parse Var stdout.i  manpage " " mandesc
+      Otherwise Do
+        Say "Impossible:" left(stdout.i,67)
+      end
+    end
+    manpage = Strip(manpage,"T"," ")
+    mandesc = Strip(mandesc,"B"," ")
+    j = i + 1
+    if j > stdout.0 then do
+      peekpage = ""
+      peekdesc = ""
+    end
+    else do
+      parse value stdout.j with peekpage 13 16 peekdesc
+    end
+    if right(manpage,1) = '-' then do
+      manpage = Strip(manpage,"T","-")
+      i = j
+      manpage = manpage''Strip(peekpage,"T"," ")
+    end
+    if peekpage = " " then do
+      i = j
+      mandesc = mandesc Strip(peekdesc,"B"," ")
+    end
+    if pos('tcsh shell',mandesc) > 0
+    then tcsh = 1
+    else tcsh = 0
+    'tbadd' mantable 'order'
+  end
+  drop stdout.
+  'tbtop' mantable
+  'tbsort' mantable 'fields(manpage,c,a)'
+  return
+
+do_it:
+/* ------------------------------------ *
+ * Translate the manpage to lower case *
+ * ------------------------------------ */
+  manpage = translate(manpage,"abcdefghijklmnopqrstuvwxyz", ,
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+/* ------------------------------------------------- *
+ * Issue the man command with the manpage parameter *
+ * ------------------------------------------------- */
+  rc = bpxwunix('man' manpage,,stdout.,stderr.)
+  if rc < 0 then signal no_unix
+  if rc = 1 then do
+     rc = bpxwunix('man tcsh'manpage,,stdout.,stderr.)
+     if rc = 1 then stderr.1 = 'No manpage for:' manpage
+     end
+
+/* ----------------------------------------------- *
+ | If stderr. has records then there was an error  |
+ | so replace stdout. with stderr. and display the |
+ | information.                                    |
+ * ----------------------------------------------- */
+  if stderr.0 > 0 then do
+    drop stdout.
+    do io = 1 to stderr.0
+      stdout.io = stderr.io
+    end
+    stdout.0 = stderr.0
+  end
+
+/* ------------------------------------------------------- *
+ * First check the results and then fixup any zero length  *
+ * records from the bpxwunix stem by making them 2 blanks. *
+ * ------------------------------------------------------- */
+  if stdout.0 > 0 then
+  do i = 1 to stdout.0
+    if length(stdout.i) = 0 then stdout.i = '  '
+  end
+
+  if zsel = 'V'
+     then do
+          manvopt = 'View'
+          mpanel = 'oview'
+          end
+     else do
+          manvopt = 'Browse'
+          mpanel = 'obrowse'
+          end
+
+/* --------------------- *
+ | Find the lrecl to use |
+ * --------------------- */
+  lrecl = 80
+  do lx = 1 to stdout.0
+    l = length(stdout.lx)
+    if l > lrecl then lrecl = l
+  end
+
+/* ------------------------ *
+ | Now display the man page |
+ * ------------------------ */
+  Address TSO
+  mandd = 'zsyn'random(9999)
+  'alloc f('mandd') unit(sysda) space(5,5) tr' ,
+    'recfm(v b) lrecl('lrecl+4') blksize(0)'
+  'execio * diskw' mandd '(finis stem stdout.'
+  drop stdout. stderr.
+  Address ISPExec
+  "LMINIT DATAID(lmb) DDNAME("mandd")"
+  if load_info /= null then
+     'Control Display Save'
+  manptit = 'Manpage:' manpage
+  manvopt 'dataid('lmb') panel('mpanel')'
+  if load_info /= null then
+     'Control Display Restore'
+  "LMFree  Dataid("lmb")"
+  Address TSO 'Free f('mandd')'
+  Address ISPExec
+  return
+
+/* ----------------------------------------- *
+ | Come here if rc is negative from bpxwunix |
+ * ----------------------------------------- */
+ No_Unix:
+ say stderr.1
+ call done
+
+/* --------------------  rexx procedure  -------------------- *
+ * Name:      LoadISPF                                        *
+ *                                                            *
+ * Function:  Load ISPF elements that are inline in the       *
+ *            REXX source code.                               *
+ *                                                            *
+ * Syntax:    rc = loadispf()                                 *
+ *                                                            *
+ *            The inline ISPF resources are limited to        *
+ *            ISPF Messages, Panels, and Skeletons,           *
+ *                 CLISTs and EXECs are also supported.       *
+ *                                                            *
+ *            The inline resources must start in column 1     *
+ *            and use the following syntax:                   *
+ *                                                            *
+ *            >START    used to indicate the start of the     *
+ *                      inline data                           *
+ *                                                            *
+ *            >END    - used to indicate the end of the       *
+ *                      inline data                           *
+ *                                                            *
+ *            Each resource begins with a type record:        *
+ *            >type name                                      *
+ *               where type is CLIST, EXEC, MSG, PANEL, SKEL  *
+ *                     name is the name of the element        *
+ *                                                            *
+ * Sample usage:                                              *
+ *          -* rexx *-                                        *
+ *          load_info = loadispf()                            *
+ *          ... magic code happens here (your code) ...       *
+ *          Address ISPEXEC                                   *
+ *          do until length(load_info) = 0                    *
+ *             parse value load_info with dd libd load_info   *
+ *             if left(libd,6) = "ALTLIB" then do             *
+ *                if libd = "ALTLIBC" then lib = "CLIST"      *
+ *                                    else lib = "EXEC"       *
+ *                Address TSO,                                *
+ *                  "Altlib Deact Application("lib")"         *
+ *                end                                         *
+ *             else "libdef" libd                             *
+ *             address tso "free f("dd")"                     *
+ *             end                                            *
+ *          exit                                              *
+ *          >Start inline elements                            *
+ *          >Panel panel1                                     *
+ *          ...                                               *
+ *          >Msg msg1                                         *
+ *          ...                                               *
+ *          >End of inline elements                           *
+ *                                                            *
+ * Returns:   the list of ddnames allocated for use along     *
+ *            with the libdef's performed or altlib           *
+ *                                                            *
+ *            format is ddname libdef ddname libdef ...       *
+ *                   libdef may be altlibc or altlibe         *
+ *                   for altlib clist or altlib exec          *
+ *                                                            *
+ * Notes:     Entire routine must be included with REXX       *
+ *            exec - inline with the code.                    *
+ *                                                            *
+ * Comments:  The entire rexx program is processed from the   *
+ *            last record to the first to find the >START     *
+ *            record at which point all records from that     *
+ *            point on are processed until the >END           *
+ *            statement or the end of the program is found.   *
+ *                                                            *
+ *            It is *strongly* suggested that the inline      *
+ *            elements be at the very end of your code so     *
+ *            that the search for them is faster.             *
+ *                                                            *
+ *            Inline ISPTLIB or ISPLLIB were not supported    *
+ *            because the values for these would have to be   *
+ *            in hex.                                         *
+ *                                                            *
+ * Author:    Lionel B. Dyck                                  *
+ *                                                            *
+ * History:                                                   *
+ *            05/10/16 - correction for clist and exec        *
+ *            04/19/16 - bug correction                       *
+ *            06/04/04 - Enhancements for speed               *
+ *            08/05/02 - Creation                             *
+ *                                                            *
+ * ---------------------------------------------------------- *
+ * Disclaimer: There is no warranty, either explicit or       *
+ * implied with this code. Use it at your own risk as there   *
+ * is no recourse from either the author or his employeer.    *
+ * ---------------------------------------------------------- */
+ LoadISPF: Procedure
+
+ parse value "" with null kmsg kpanel kskel first returns ,
+                     kclist kexec
+/* ------------------------------------------------------- *
+ * Find the InLine ISPF Elements and load them into a stem *
+ * variable.                                               *
+ *                                                         *
+ * Elements keyword syntax:                                *
+ * >START - start of inline data                           *
+ * >CLIST name                                             *
+ * >EXEC name                                              *
+ * >MSG name                                               *
+ * >PANEL name                                             *
+ * >SKEL name                                              *
+ * >END   - end of all inline data (optional if last)      *
+ * ------------------------------------------------------- */
+ last_line = sourceline()
+ do i = last_line to 1 by -1
+    line = sourceline(i)
+    if translate(left(line,6)) = ">START " then leave
+    end
+ rec = 0
+/* --------------------------------------------------- *
+ * Flag types of ISPF resources by testing each record *
+ * then add each record to the data. stem variable.    *
+ * --------------------------------------------------- */
+ do j = i+1 to last_line
+    line = sourceline(j)
+    if translate(left(line,5)) = ">END "   then leave
+    if translate(left(line,7)) = ">CLIST " then kclist = 1
+    if translate(left(line,6)) = ">EXEC "  then kexec  = 1
+    if translate(left(line,5)) = ">MSG "   then kmsg   = 1
+    if translate(left(line,7)) = ">PANEL " then kpanel = 1
+    if translate(left(line,6)) = ">SKEL "  then kskel  = 1
+    rec  = rec + 1
+    data.rec = line
+    end
+
+/* ----------------------------------------------------- *
+ * Now create the Library and Load the Member(s)         *
+ * ----------------------------------------------------- */
+ Address ISPExec
+/* ----------------------------- *
+ * Assign dynamic random ddnames *
+ * ----------------------------- */
+ clistdd = "lc"random(999)
+ execdd  = "le"random(999)
+ msgdd   = "lm"random(999)
+ paneldd = "lp"random(999)
+ skeldd  = "ls"random(999)
+
+/* ---------------------------------------- *
+ *  LmInit and LmOpen each resource library *
+ * ---------------------------------------- */
+ if kclist <> null then do
+    call alloc_dd clistdd
+    "Lminit dataid(clist) ddname("clistdd")"
+    "LmOpen dataid("clist") Option(Output)"
+    returns = strip(returns clistdd 'ALTLIBC')
+    end
+ if kexec <> null then do
+    call alloc_dd execdd
+    "Lminit dataid(exec) ddname("execdd")"
+    "LmOpen dataid("exec") Option(Output)"
+    returns = strip(returns execdd 'ALTLIBE')
+    end
+ if kmsg <> null then do
+    call alloc_dd msgdd
+    "Lminit dataid(msg) ddname("msgdd")"
+    "LmOpen dataid("msg") Option(Output)"
+    returns = strip(returns msgdd 'ISPMLIB')
+    end
+ if kpanel <> null then do
+    call alloc_dd paneldd
+    "Lminit dataid(panel) ddname("paneldd")"
+    "LmOpen dataid("panel") Option(Output)"
+    returns = strip(returns paneldd 'ISPPLIB')
+    end
+ if kskel <> null then do
+    call alloc_dd skeldd
+    "Lminit dataid(skel) ddname("skeldd")"
+    "LmOpen dataid("skel") Option(Output)"
+    returns = strip(returns skeldd 'ISPSLIB')
+    end
+
+/* ----------------------------------------------- *
+ * Process all records in the data. stem variable. *
+ * ----------------------------------------------- */
+ do i = 1 to rec
+    record = data.i
+    recordu = translate(record)
+    if left(recordu,5) = ">END " then leave
+    if left(recordu,7) = ">CLIST " then do
+       if first = 1 then call add_it
+       type = "Clist"
+       first = 1
+       parse value record with x name
+       iterate
+       end
+    if left(recordu,6) = ">EXEC " then do
+       if first = 1 then call add_it
+       type = "Exec"
+       first = 1
+       parse value record with x name
+       iterate
+       end
+    if left(recordu,5) = ">MSG " then do
+       if first = 1 then call add_it
+       type = "Msg"
+       first = 1
+       parse value record with x name
+       iterate
+       end
+    if left(recordu,7) = ">PANEL " then do
+       if first = 1 then call add_it
+       type = "Panel"
+       first = 1
+       parse value record with x name
+       iterate
+       end
+    if left(recordu,6) = ">SKEL " then do
+       if first = 1 then call add_it
+       type = "Skel"
+       first = 1
+       parse value record with x name
+       iterate
+       end
+   /* --------------------------------------------*
+    * Put the record into the appropriate library *
+    * based on the record type.                   *
+    * ------------------------------------------- */
+    Select
+      When type = "Clist" then
+           "LmPut dataid("clist") MODE(INVAR)" ,
+                 "DataLoc(record) DataLen(255)"
+      When type = "Exec" then
+           "LmPut dataid("exec") MODE(INVAR)" ,
+                 "DataLoc(record) DataLen(255)"
+      When type = "Msg" then
+           "LmPut dataid("msg") MODE(INVAR)" ,
+                 "DataLoc(record) DataLen(80)"
+      When type = "Panel" then do
+           phit = 0
+           if left(record,2) = '/*' then phit = 1
+           if left(record,2) = '*/' then phit = 1
+           if phit = 0 then
+           "LmPut dataid("panel") MODE(INVAR)" ,
+                 "DataLoc(record) DataLen(80)"
+           end
+      When type = "Skel" then
+           "LmPut dataid("skel") MODE(INVAR)" ,
+                 "DataLoc(record) DataLen(80)"
+      Otherwise nop
+      end
+    end
+ if type <> null then call add_it
+/* ---------------------------------------------------- *
+ * Processing completed - now lmfree the allocation and *
+ * Libdef the library.                                  *
+ * ---------------------------------------------------- */
+ if kclist <> null then do
+    Address TSO,
+    "Altlib Act Application(Clist) File("clistdd")"
+    "LmFree dataid("clist")"
+    end
+ if kexec <> null then do
+    Address TSO,
+    "Altlib Act Application(Exec) File("execdd")"
+    "LmFree dataid("exec")"
+    end
+ if kmsg <> null then do
+    "LmFree dataid("msg")"
+    "Libdef ISPMlib Library ID("msgdd") Stack"
+    end
+ if kpanel <> null then do
+    "Libdef ISPPlib Library ID("paneldd") Stack"
+    "LmFree dataid("panel")"
+    end
+ if kskel <> null then do
+    "Libdef ISPSlib Library ID("skeldd") Stack"
+    "LmFree dataid("skel")"
+    end
+ return returns
+
+/* --------------------------- *
+ * Add the Member using LmmAdd *
+ * based upon type of resource *
+ * --------------------------- */
+ Add_It:
+ Select
+    When type = "Clist" then
+         "LmmAdd dataid("clist") Member("name")"
+    When type = "Exec" then
+         "LmmAdd dataid("exec") Member("name")"
+    When type = "Msg" then
+         "LmmAdd dataid("msg") Member("name")"
+    When type = "Panel" then
+         "LmmAdd dataid("panel") Member("name")"
+    When type = "Skel" then
+         "LmmAdd dataid("skel") Member("name")"
+    Otherwise nop
+    end
+ type = null
+ return
+
+/* ------------------------------ *
+ * ALlocate the temp ispf library *
+ * ------------------------------ */
+ Alloc_DD:
+ arg dd
+ Address TSO
+ if pos(left(dd,2),"lc le") > 0 then
+ "Alloc f("dd") unit(sysda) spa(5,5) dir(1)",
+    "recfm(v b) lrecl(255) blksize(32760)"
+ else
+ "Alloc f("dd") unit(sysda) spa(5,5) dir(1)",
+    "recfm(f b) lrecl(80) blksize(23440)"
+ return
+/*
+>START
+>Panel OMVSMAN
+)Attr Default(%+_)
+   ! type( input) intens(high) caps(on ) just(left ) pad('_')
+   ^ type(output) intens(low ) caps(off) just(asis ) pad(' ')
+   @ type(output) intens(high) caps(off) just(left ) pad(' ')
+   $ type(text) intens(high) hilite(reverse)
+   # type(text) intens(high) hilite(uscore)
+   + type(text) intens(low) skip(on)
+)Body  Expand(\\) Width(&zscreenw)
+%-\-\ $OMVS Man Pages - &ver%\-\-
+%Command ===>_zcmd                                 \ \%Scroll ===>_amt +
+%
++Command Options:%Locate+manpage %Search+string %Refresh
++Selection Options:%S+Select
++
+#Sel+#ManPage+          #Description ^z
+)Model
+!z+  @z                 ^z
+)Init
+  .ZVARS = '(si zsel manpage mandesc)'
+  if (&amt = &z)
+      &amt = csr
+ .cursor = zcmd
+ .help = omvsmanh
+ &scrolw = &zscreenw
+)Proc
+if (&zsel = _)
+    &zsel = &z
+ver (&zsel,list,S,V,'=')
+if (&ztdsels = 0000)
+   &row = .csrrow
+   if (&row ^= 0)
+       if (&zsel = &z)
+           &zsel = 'S'
+if (&ztdsels ^= 0000)
+    &row = 0
+if (&zsel ^= &z)
+   if (&zsel = '=')
+       &zsel = &osel
+&osel = &zsel
+)FIELD
+FIELD(mandesc) SCROLL(ZSCR) Len(120) ind(si,'<>')
+)End
+>Panel omvsmanh
+)ATTR DEFAULT(%+_)
+   %   TYPE(TEXT)  INTENS(HIGH) SKIP(ON)
+   +   TYPE(TEXT)  INTENS(LOW)  SKIP(ON) COLOR(GREEN)
+   _   TYPE(INPUT) INTENS(HIGH) CAPS(ON) JUST(LEFT) HILITE(USCORE)
+)BODY EXPAND(\\)
+%Tutorial+-\-\(%OMVSMAN+)-\-\%Tutorial
+%Command ===>_ZCMD
++
++ This table lists the known/available OMVS commands.
++ (note some have no man pages associated with them)
++
++Line Selections:
+  % S+      select a manpage to be browsed under ISPF Browse
+  % V+      select a manpage to be viewed under ISPF View
+  % =+      repeat previously used selection
++
++Commands:
+  % Locate+ locate the requested manpage in the table
+  % Refresh+refresh with all entries after a%Search+
+  % Search+ search all manpages for the string and display just those
+  +         alias Find
++
++Note: The description field is scrollable to support long descriptions.
++      Place the cursor in the description field and use the Right/Left keys.
++
++The list is generated from the command:  man -k .
++
+)PROC
+)END
+>Panel obrowse
+/*
+)PANEL KEYLIST(ISRSPBC,ISR)
+)ATTR DEFAULT(ˆ) FORMAT(MIX)            /* ISRBROBA - ENGLISH - 7.1 */
+ 29 TYPE(AB)
+ 04 TYPE(ABSL) GE(ON)
+ 05 TYPE(PT)
+ 09 TYPE(FP)
+ 0A TYPE(NT)
+ 13 TYPE(NEF) PADC(USER)
+ 16 TYPE(VOI) PADC(USER)
+ 26 AREA(DYNAMIC) EXTEND(ON) SCROLL(ON)
+ 01 TYPE(DATAOUT) INTENS(LOW)
+ 02 TYPE(DATAOUT)
+ 0B TYPE(DATAOUT) FORMAT(DBCS) OUTLINE(L)
+ 0C TYPE(DATAOUT) FORMAT(EBCDIC) OUTLINE(L)
+ 0D TYPE(DATAOUT) FORMAT(&MIXED) OUTLINE(L)
+ 10 TYPE(DATAOUT) INTENS(LOW) FORMAT(DBCS) OUTLINE(L)
+ 11 TYPE(DATAOUT) INTENS(LOW) FORMAT(EBCDIC) OUTLINE(L)
+ 12 TYPE(DATAOUT) INTENS(LOW) FORMAT(&MIXED) OUTLINE(L)
+)ABC DESC('Menu') MNEM(1)
+PDC DESC('Settings') UNAVAIL(ZPM1) MNEM(1) ACC(CTRL+S)
+ ACTION RUN(ISRROUTE) PARM('SET')
+PDC DESC('View') UNAVAIL(ZPM2) MNEM(1) ACC(CTRL+V)
+ ACTION RUN(ISRROUTE) PARM('BR1')
+PDC DESC('Edit') UNAVAIL(ZPM3) MNEM(1) ACC(CTRL+E)
+ ACTION RUN(ISRROUTE) PARM('ED1')
+PDC DESC('ISPF Command Shell') UNAVAIL(ZPM4) MNEM(6) ACC(CTRL+C)
+ ACTION RUN(ISRROUTE) PARM('C1')
+PDC DESC('Dialog Test...') UNAVAIL(ZPM5) MNEM(8) ACC(CTRL+T)
+ ACTION RUN(ISRROUTE) PARM('DAL')
+PDC DESC('Other IBM Products...') UNAVAIL(ZPM6) MNEM(1) ACC(CTRL+O)
+ ACTION RUN(ISRROUTE) PARM('OIB')
+PDC DESC('SCLM') UNAVAIL(ZPM7) MNEM(3) ACC(CTRL+L)
+ ACTION RUN(ISRROUTE) PARM('SCL')
+PDC DESC('ISPF Workplace') UNAVAIL(ZPM8) MNEM(6) ACC(CTRL+W)
+ ACTION RUN(ISRROUTE) PARM('WRK')
+PDC DESC('Status Area...') UNAVAIL(ZPMS) MNEM(8) ACC(CTRL+A)
+ ACTION RUN(ISRROUTE) PARM('SAM')
+PDC DESC('Exit') MNEM(2) PDSEP(ON) ACC(CTRL+X) ACTION RUN(EXIT)
+)ABCINIT
+.ZVARS=ISR@OPT
+)ABC DESC('Utilities') MNEM(1)
+PDC DESC('Library') UNAVAIL(ZUT1) MNEM(1) ACC(ALT+1)
+ ACTION RUN(ISRROUTE) PARM('U1')
+PDC DESC('Data set') UNAVAIL(ZUT2) MNEM(1) ACC(ALT+2)
+ ACTION RUN(ISRROUTE) PARM('U2')
+PDC DESC('Move/Copy') UNAVAIL(ZUT3) MNEM(1) ACC(ALT+3)
+ ACTION RUN(ISRROUTE) PARM('U3')
+PDC DESC('Data Set List') UNAVAIL(ZUT4) MNEM(2) ACC(ALT+4)
+ ACTION RUN(ISRROUTE) PARM('U4')
+PDC DESC('Reset Statistics') UNAVAIL(ZUT5) MNEM(5) ACC(ALT+5)
+ ACTION RUN(ISRROUTE) PARM('U5')
+PDC DESC('Hardcopy') UNAVAIL(ZUT6) MNEM(1) ACC(ALT+6)
+ ACTION RUN(ISRROUTE) PARM('U6')
+PDC DESC('Download...') UNAVAIL(ZUTDT) MNEM(2) ACC(ALT+7)
+ ACTION RUN(ISRROUTE) PARM('UDT')
+PDC DESC('Outlist') UNAVAIL(ZUT7) MNEM(2) ACC(ALT+8)
+ ACTION RUN(ISRROUTE) PARM('U8')
+PDC DESC('Commands...') UNAVAIL(ZUT8) MNEM(1) ACC(ALT+9)
+ ACTION RUN(ISRROUTE) PARM('U9')
+PDC DESC('Reserved') UNAVAIL(ZUT9) MNEM(6) ACTION RUN(ISRROUTE) PARM('U10')
+PDC DESC('Format') UNAVAIL(ZUT10) MNEM(1) ACC(ALT+F1)
+ ACTION RUN(ISRROUTE) PARM('U11')
+PDC DESC('SuperC') UNAVAIL(ZUT11) MNEM(1) PDSEP(ON) ACC(CTRL+F2)
+ ACTION RUN(ISRROUTE) PARM('U12')
+PDC DESC('SuperCE') UNAVAIL(ZUT12) MNEM(3) ACC(CTRL+F3)
+ ACTION RUN(ISRROUTE) PARM('U13')
+PDC DESC('Search-For') UNAVAIL(ZUT13) MNEM(2) ACC(CTRL+F4)
+ ACTION RUN(ISRROUTE) PARM('U14')
+PDC DESC('Search-ForE') UNAVAIL(ZUT14) MNEM(4) ACC(CTRL+F5)
+ ACTION RUN(ISRROUTE) PARM('U15')
+PDC DESC('Table Utility') UNAVAIL(ZUT15) MNEM(3) ACC(CTRL+F6)
+ ACTION RUN(ISRROUTE) PARM('U16')
+PDC DESC('Directory List') UNAVAIL(ZUT16) MNEM(2) ACC(CTRL+F7)
+ ACTION RUN(ISRROUTE) PARM('U17')
+)ABCINIT
+.ZVARS=PDFUTIL
+     &zut9 = '1'
+)ABC DESC('Compilers') MNEM(1)
+PDC DESC('Foreground Compilers') MNEM(1) ACTION RUN(ISRROUTE) PARM('FGD')
+PDC DESC('Background Compilers') MNEM(1) ACTION RUN(ISRROUTE) PARM('BKG')
+PDC DESC('ISPPREP Panel Utility...') MNEM(1) ACTION RUN(ISPPREP)
+PDC DESC('DTL Compiler...') MNEM(1) ACTION RUN(ISPDTLC)
+)ABCINIT
+.ZVARS=ISRLANG
+)ABC DESC('Help') MNEM(1)
+PDC DESC('General introduction') MNEM(1) ACTION RUN(TUTOR) PARM('ISR1B001')
+PDC DESC('Display screen format') MNEM(1) ACTION RUN(TUTOR) PARM('ISR14000')
+PDC DESC('Scrolling data') MNEM(1) ACTION RUN(TUTOR) PARM('ISR15000')
+PDC DESC('Assigning labels') MNEM(1) ACTION RUN(TUTOR) PARM('ISR16000')
+PDC DESC('Browse commands') MNEM(1) ACTION RUN(TUTOR) PARM('ISR17000')
+PDC DESC('Terminating Browse') MNEM(1) ACTION RUN(TUTOR) PARM('ISR18000')
+PDC DESC('Appendices') MNEM(2) ACTION RUN(TUTOR) PARM('ISR00004')
+PDC DESC('Index') MNEM(1) ACTION RUN(TUTOR) PARM('ISR91000')
+)ABCINIT
+.ZVARS=BROHELP
+)BODY  EXPAND(//) WIDTH(&zscreenw) CMD(ZCMD)
+Ž‰ Menu‰ Utilities‰ Compilers‰ Helpˆ
+œ--/-/-------------------------------------------------------------------------
+BROWSE   Z/ /                                    LineZ         ColZ      ˆ
+Command ===>Z/ /                                            Scroll ===>Z   ˆ
+ZDATA/ /                                                                      
+/ /                                                                           
+/ /                                                                           
+)INIT
+.ZVARS = '(ZTITLB ZLINEX ZCOLUMS ZCMD ZSCBR)'
+.HELP = ISR1B000
+&ZCMD = ' '
+VGET (ZSCBR) PROFILE     /* Fill Scroll Vars if       */
+IF (&ZSCBR = ' ')  &ZSCBR  = 'CSR'  /* Blank with Page */
+&ZTITLB = &MANPTIT
+&MIXED = MIX
+IF (&ZPDMIX = N) &MIXED = EBCDIC
+)REINIT
+REFRESH(ZCMD,ZSCBR,ZDATA,ZLINEX,ZCOLUMS,ZTITLB)
+)PROC
+&ZCURSOR = .CURSOR
+&ZCSROFF = .CSRPOS
+VPUT (ZSCBR) PROFILE     /*                           */
+&ZLVLINE = LVLINE(ZDATA)
+)FIELD
+FIELD(ZTITLB) SCROLL(ZSCR)
+*/
+)END
+>Panel oview
+/*
+)PANEL KEYLIST(ISRSPEC,ISR)
+)ATTR DEFAULT(ˆ‰) FORMAT(MIX)            /* ISREDDE2 - ENGLISH - 7.1 */
+ 15 TYPE(AB)
+ 2A TYPE(ABSL) GE(ON)
+ 2B TYPE(PT)
+ 2F TYPE(FP)
+ 14 TYPE(NT)
+ 1B TYPE(NEF) PADC(USER)
+ 1C TYPE(VOI) PADC(USER)
+ 26 AREA(DYNAMIC) EXTEND(ON) SCROLL(ON) USERMOD('20')
+ 01 TYPE(DATAOUT) INTENS(LOW)
+ 02 TYPE(DATAOUT)
+ 03 TYPE(DATAOUT) SKIP(ON)
+ 04 TYPE(DATAIN) INTENS(LOW) CAPS(OFF) FORMAT(&MIXED)
+ 05 TYPE(DATAIN) CAPS(OFF) FORMAT(&MIXED)
+ 06 TYPE(DATAIN) INTENS(LOW) CAPS(IN) FORMAT(&MIXED)
+ 07 TYPE(DATAIN) CAPS(IN) FORMAT(&MIXED)
+ 08 TYPE(DATAIN) INTENS(LOW) FORMAT(DBCS) OUTLINE(L)
+ 09 TYPE(DATAIN) INTENS(LOW) FORMAT(EBCDIC) OUTLINE(L)
+ 0A TYPE(DATAIN) INTENS(LOW) FORMAT(&MIXED) OUTLINE(L)
+ 0B TYPE(DATAIN) INTENS(LOW) CAPS(IN) COLOR(&ZPLEXCLR) FORMAT(&MIXED)
+ 0C TYPE(DATAIN) INTENS(LOW) CAPS(OFF) COLOR(&ZPLEXCLR) FORMAT(&MIXED)
+ 0D TYPE(DATAIN) INTENS(LOW) CAPS(IN) COLOR(BLUE) FORMAT(&MIXED)
+ 13 TYPE(DATAOUT) SKIP(ON) HILITE(USCORE)
+ 16 TYPE(DATAIN) INTENS(LOW) CAPS(IN) HILITE(USCORE) FORMAT(&MIXED)
+ 17 TYPE(DATAIN) CAPS(IN) HILITE(USCORE) FORMAT(&MIXED)
+ 1D TYPE(DATAIN) INTENS(LOW) CAPS(IN) COLOR(BLUE) HILITE(USCORE)
+      FORMAT(&MIXED)
+ 20 TYPE(DATAIN) INTENS(LOW) CAPS(IN) FORMAT(&MIXED)
+ Z  TYPE(CHAR) COLOR(PINK) HILITE(REVERSE)
+ R  TYPE(CHAR) COLOR(RED)
+ G  TYPE(CHAR) COLOR(GREEN)
+ B  TYPE(CHAR) COLOR(BLUE)
+ W  TYPE(CHAR) COLOR(WHITE)
+ P  TYPE(CHAR) COLOR(PINK)
+ Y  TYPE(CHAR) COLOR(YELLOW)
+ T  TYPE(CHAR) COLOR(TURQ)
+ L  TYPE(CHAR) COLOR(RED)
+ U  TYPE(CHAR) HILITE(USCORE)
+ K  TYPE(CHAR) COLOR(&ZCK) HILITE(&ZHK)
+ O  TYPE(CHAR) COLOR(&ZCO) HILITE(&ZHO)
+ Q  TYPE(CHAR) COLOR(&ZCQ) HILITE(&ZHQ)
+ C  TYPE(CHAR) COLOR(&ZCC) HILITE(&ZHC)
+ V  TYPE(CHAR) COLOR(&ZCV) HILITE(&ZHV)
+ D  TYPE(CHAR) COLOR(&ZCD) HILITE(&ZHD)
+ F  TYPE(CHAR) COLOR(&ZCF) HILITE(&ZHF)
+ S  TYPE(CHAR) COLOR(&ZCS) HILITE(&ZHS)
+ Ü  TYPE(NEF) CAPS(ON) PADC(USER)
+)ABC DESC('File') MNEM(1)
+PDC DESC('Save') UNAVAIL(ZEDF) MNEM(1) ACTION RUN(>SAVE)
+PDC DESC('Cancel') MNEM(1) ACTION RUN(CANCEL)
+PDC DESC('Exit') MNEM(1) ACTION RUN(END)
+)ABCINIT
+.ZVARS=EDITFILE
+   IF (&ZVMODET = 'VIEW') &zedf = 1
+   ELSE                   &zedf = 0
+)ABC DESC('Edit') MNEM(1)
+PDC DESC('Reset') MNEM(1) ACTION RUN(>RESET)
+PDC DESC('Undo') MNEM(1) ACTION RUN(>UNDO)
+PDC DESC('Hilite') UNAVAIL(ZEDE) MNEM(1) ACTION RUN(>HI)
+PDC DESC('Cut') MNEM(1) ACTION RUN(>CUT)
+PDC DESC('Paste') MNEM(1) ACTION RUN(>PASTE)
+)ABCINIT
+.ZVARS=EDITEDIT
+   IF (&ZEDHI ^= 'YES')  &zede = 1
+   ELSE &zede = 0
+)ABC DESC('Edit_Settings') MNEM(2)
+PDC DESC('Edit settings') MNEM(1) ACTION RUN(>EDSET)
+)ABCINIT
+.ZVARS=PDFCFM
+)ABC DESC('Menu') MNEM(1)
+PDC DESC('Settings') UNAVAIL(ZPM1) MNEM(1) ACC(CTRL+S)
+ ACTION RUN(ISRROUTE) PARM('SET')
+PDC DESC('View') UNAVAIL(ZPM2) MNEM(1) ACC(CTRL+V)
+ ACTION RUN(ISRROUTE) PARM('BR1')
+PDC DESC('Edit') UNAVAIL(ZPM3) MNEM(1) ACC(CTRL+E)
+ ACTION RUN(ISRROUTE) PARM('ED1')
+PDC DESC('ISPF Command Shell') UNAVAIL(ZPM4) MNEM(6) ACC(CTRL+C)
+ ACTION RUN(ISRROUTE) PARM('C1')
+PDC DESC('Dialog Test...') UNAVAIL(ZPM5) MNEM(8) ACC(CTRL+T)
+ ACTION RUN(ISRROUTE) PARM('DAL')
+PDC DESC('Other IBM Products...') UNAVAIL(ZPM6) MNEM(1) ACC(CTRL+O)
+ ACTION RUN(ISRROUTE) PARM('OIB')
+PDC DESC('SCLM') UNAVAIL(ZPM7) MNEM(3) ACC(CTRL+L)
+ ACTION RUN(ISRROUTE) PARM('SCL')
+PDC DESC('ISPF Workplace') UNAVAIL(ZPM8) MNEM(6) ACC(CTRL+W)
+ ACTION RUN(ISRROUTE) PARM('WRK')
+PDC DESC('Status Area...') UNAVAIL(ZPMS) MNEM(8) ACC(CTRL+A)
+ ACTION RUN(ISRROUTE) PARM('SAM')
+PDC DESC('Exit') MNEM(2) PDSEP(ON) ACC(CTRL+X) ACTION RUN(EXIT)
+)ABCINIT
+.ZVARS=ISR@OPT
+)ABC DESC('Utilities') MNEM(1)
+PDC DESC('Library') UNAVAIL(ZUT1) MNEM(1) ACC(ALT+1)
+ ACTION RUN(ISRROUTE) PARM('U1')
+PDC DESC('Data set') UNAVAIL(ZUT2) MNEM(1) ACC(ALT+2)
+ ACTION RUN(ISRROUTE) PARM('U2')
+PDC DESC('Move/Copy') UNAVAIL(ZUT3) MNEM(1) ACC(ALT+3)
+ ACTION RUN(ISRROUTE) PARM('U3')
+PDC DESC('Data Set List') UNAVAIL(ZUT4) MNEM(2) ACC(ALT+4)
+ ACTION RUN(ISRROUTE) PARM('U4')
+PDC DESC('Reset Statistics') UNAVAIL(ZUT5) MNEM(5) ACC(ALT+5)
+ ACTION RUN(ISRROUTE) PARM('U5')
+PDC DESC('Hardcopy') UNAVAIL(ZUT6) MNEM(1) ACC(ALT+6)
+ ACTION RUN(ISRROUTE) PARM('U6')
+PDC DESC('Download...') UNAVAIL(ZUTDT) MNEM(2) ACC(ALT+7)
+ ACTION RUN(ISRROUTE) PARM('UDT')
+PDC DESC('Outlist') UNAVAIL(ZUT7) MNEM(2) ACC(ALT+8)
+ ACTION RUN(ISRROUTE) PARM('U8')
+PDC DESC('Commands...') UNAVAIL(ZUT8) MNEM(1) ACC(ALT+9)
+ ACTION RUN(ISRROUTE) PARM('U9')
+PDC DESC('Reserved') UNAVAIL(ZUT9) MNEM(6) ACTION RUN(ISRROUTE) PARM('U10')
+PDC DESC('Format') UNAVAIL(ZUT10) MNEM(1) ACC(ALT+F1)
+ ACTION RUN(ISRROUTE) PARM('U11')
+PDC DESC('SuperC') UNAVAIL(ZUT11) MNEM(1) PDSEP(ON) ACC(CTRL+F2)
+ ACTION RUN(ISRROUTE) PARM('U12')
+PDC DESC('SuperCE') UNAVAIL(ZUT12) MNEM(3) ACC(CTRL+F3)
+ ACTION RUN(ISRROUTE) PARM('U13')
+PDC DESC('Search-For') UNAVAIL(ZUT13) MNEM(2) ACC(CTRL+F4)
+ ACTION RUN(ISRROUTE) PARM('U14')
+PDC DESC('Search-ForE') UNAVAIL(ZUT14) MNEM(4) ACC(CTRL+F5)
+ ACTION RUN(ISRROUTE) PARM('U15')
+PDC DESC('Table Utility') UNAVAIL(ZUT15) MNEM(3) ACC(CTRL+F6)
+ ACTION RUN(ISRROUTE) PARM('U16')
+PDC DESC('Directory List') UNAVAIL(ZUT16) MNEM(2) ACC(CTRL+F7)
+ ACTION RUN(ISRROUTE) PARM('U17')
+)ABCINIT
+.ZVARS=PDFUTIL
+     &zut9 = '1'
+)ABC DESC('Compilers') MNEM(1)
+PDC DESC('Foreground Compilers') MNEM(1) ACTION RUN(ISRROUTE) PARM('FGD')
+PDC DESC('Background Compilers') MNEM(1) ACTION RUN(ISRROUTE) PARM('BKG')
+PDC DESC('ISPPREP Panel Utility...') MNEM(1) ACTION RUN(ISPPREP)
+PDC DESC('DTL Compiler...') MNEM(1) ACTION RUN(ISPDTLC)
+)ABCINIT
+.ZVARS=ISRLANG
+)ABC DESC('Test') MNEM(1)
+PDC DESC('Functions...') UNAVAIL(ZPM5) MNEM(1) ACTION RUN(ISRROUTE) PARM('DL1')
+PDC DESC('Panels...') UNAVAIL(ZPM5) MNEM(1) ACTION RUN(ISRROUTE) PARM('DL2')
+PDC DESC('Variables...') UNAVAIL(ZPM5) MNEM(1) ACTION RUN(ISRROUTE) PARM('DL3')
+PDC DESC('Tables...') UNAVAIL(ZPM5) MNEM(1) ACTION RUN(ISRROUTE) PARM('DL4')
+PDC DESC('Log') UNAVAIL(ZPM5) MNEM(1) ACTION RUN(ISRROUTE) PARM('DL5')
+PDC DESC('Services...') UNAVAIL(ZPM5) MNEM(1) ACTION RUN(ISRROUTE) PARM('DL6')
+PDC DESC('Traces...') UNAVAIL(ZPM5) MNEM(2) ACTION RUN(ISRROUTE) PARM('DL7')
+PDC DESC('Break Points...') UNAVAIL(ZPM5) MNEM(1)
+ ACTION RUN(ISRROUTE) PARM('DL8')
+PDC DESC('Dialog Test...') UNAVAIL(ZPM5) MNEM(1)
+ ACTION RUN(ISRROUTE) PARM('DAL')
+PDC DESC('Dialog Test appl ID...') MNEM(2) ACTION RUN(ISRROUTE) PARM('DAP')
+)ABCINIT
+.ZVARS=DIATEST
+)ABC DESC('Help') MNEM(1)
+PDC DESC('General') MNEM(1) ACTION RUN(TUTOR) PARM('ISR2A000')
+PDC DESC('Display screen format') MNEM(1) ACTION RUN(TUTOR) PARM('ISR2E000')
+PDC DESC('Scrolling data') MNEM(1) ACTION RUN(TUTOR) PARM('ISR2F000')
+PDC DESC('Sequence numbering') MNEM(2) ACTION RUN(TUTOR) PARM('ISR2G000')
+PDC DESC('Display modes') MNEM(2) ACTION RUN(TUTOR) PARM('ISR2H000')
+PDC DESC('Tabbing') MNEM(1) ACTION RUN(TUTOR) PARM('ISR2I000')
+PDC DESC('Automatic recovery') MNEM(1) ACTION RUN(TUTOR) PARM('ISR2J000')
+PDC DESC('Edit profiles') MNEM(6) ACTION RUN(TUTOR) PARM('ISR2K000')
+PDC DESC('Edit line commands') MNEM(6) ACTION RUN(TUTOR) PARM('ISR2L000')
+PDC DESC('Edit primary commands') MNEM(7) ACTION RUN(TUTOR) PARM('ISR2M000')
+PDC DESC('Labels and line ranges') MNEM(3) ACTION RUN(TUTOR) PARM('ISR2Q000')
+PDC DESC('Ending an edit session') MNEM(2) ACTION RUN(TUTOR) PARM('ISR2N000')
+PDC DESC('Appendices') MNEM(8) ACTION RUN(TUTOR) PARM('ISR00004')
+PDC DESC('Index') MNEM(5) ACTION RUN(TUTOR) PARM('ISR91000')
+)ABCINIT
+.ZVARS=EDMHELP
+)BODY  EXPAND(//) WIDTH(&zscreenw) CMD(ZCMD)
+
+ File
+ Edit
+ Edit_Settings
+ Menu
+ Utilities
+ Compilers
+ Test
+ Help
+Š--/-/-------------------------------------------------------------------------
+Z         Z/ /                                           ColumnsZ    Z    
+Command ===>Z/ /                                            Scroll ===>ÜZ   
+ZDATA,ZSHADOW/ /                                                              
+/ /                                                                           
+)INIT
+.ZVARS = '(ZVMODET ZTITLE ZCL ZCR ZCMD ZSCED)'
+&ZHIDEX = 'Y'
+IF (&ZVMODET = 'VIEW') .HELP = ISR10000  /* DEFAULT TUTORIAL NAME */
+ELSE                   .HELP = ISR20000  /* DEFAULT TUTORIAL NAME */
+&zpm3 = 0
+VGET (ZSCED) PROFILE        /* Fill Scroll Vars if       */
+IF (&ZSCED = ' ') &ZSCED = 'PAGE'  /* Blank with page    */
+&MIXED = TRANS(&ZPDMIX N,EBCDIC *,MIX) /* set mixed format */
+&ztitle = &maptit
+)REINIT
+REFRESH(*)
+IF (&ZVMODET = 'VIEW') .HELP = ISR10000  /* DEFAULT TUTORIAL NAME */
+ELSE                   .HELP = ISR20000  /* DEFAULT TUTORIAL NAME */
+)PROC
+REFRESH(*)
+&ZCURSOR = .CURSOR
+&ZCSROFF = .CSRPOS
+VPUT (ZSCED) PROFILE
+&ZLVLINE = LVLINE(ZDATA)
+)FIELD
+FIELD(ZTITLE)
+FIELD(ZCMD) LEN(255)
+*/
+)END
+>msg oman00
+OMAN001 '&SMSG'
+'&LMSG'
+>END
+*/

@@ -1,5 +1,5 @@
 /* --------------------  rexx procedure  -------------------- */
- ver = '2.0'
+ ver = '2.2'
 /* Name:      OMVSMAN                                         *
  *                                                            *
  * Function:  Present the user with a table of available      *
@@ -39,9 +39,19 @@
  *              - issues man -k string                        *
  *            - alias Find                                    *
  *                                                            *
+ * Notes:     1. User/ISV added man pages will not be found   *
+ *               for use in the man page directory as the     *
+ *               directory file is not updated (investigating)*
+ *            2. The User/ISV man pages may still be displayed*
+ *               as the MANPATH is picked up from both the    *
+ *               /etc/profile and the user .profile           *
+ *                                                            *
  * Author:    Lionel B. Dyck                                  *
  *                                                            *
  * History:                                                   *
+ *            02/19/21 - 2.2 Clean up 2 obsolete instructions *
+ *            10/06/20 - 2.1 Check for /etc/profile and user  *
+ *                           .profile for MANPATH             *
  *            11/07/18 - 2.0 Cosmetic - add comments around   *
  *                           inline section                   *
  *            02/28/18 - 2.0 Change tbend to tbclose          *
@@ -86,6 +96,11 @@
  | Load ISPF Panels/etc. |
  * --------------------- */
   load_info = loadispf()
+
+/* --------------------- *
+ | Get the full MANPATH  |
+ * --------------------- */
+  call get_manpath
 
 /* ----------------------- *
  * Get the passed manpage *
@@ -216,7 +231,7 @@
  | executing the command:  man -k .         |
  * ---------------------------------------- */
 build_list:
-  rc = bpxwunix(mansearch,,stdout.,stderr.)
+  rc = bpxwunix(mansearch,,stdout.,stderr.,env.)
   if rc < 0 then signal no_unix
   mantable = 'man'random(999)
   'tbcreate' mantable 'keys(manpage) names(mandesc tcsh)' ,
@@ -271,10 +286,10 @@ do_it:
 /* ------------------------------------------------- *
  * Issue the man command with the manpage parameter *
  * ------------------------------------------------- */
-  rc = bpxwunix('man' manpage,,stdout.,stderr.)
+  rc = bpxwunix('man' manpage,,stdout.,stderr.,env.)
   if rc < 0 then signal no_unix
   if rc = 1 then do
-     rc = bpxwunix('man tcsh'manpage,,stdout.,stderr.)
+     rc = bpxwunix('man tcsh'manpage,,stdout.,stderr.,env.)
      if rc = 1 then stderr.1 = 'No manpage for:' manpage
      end
 
@@ -330,12 +345,10 @@ do_it:
   drop stdout. stderr.
   Address ISPExec
   "LMINIT DATAID(lmb) DDNAME("mandd")"
-  if load_info /= null then
-     'Control Display Save'
+  'Control Display Save'
   manptit = 'Manpage:' manpage
   manvopt 'dataid('lmb') panel('mpanel')'
-  if load_info /= null then
-     'Control Display Restore'
+  'Control Display Restore'
   "LMFree  Dataid("lmb")"
   Address TSO 'Free f('mandd')'
   Address ISPExec
@@ -347,6 +360,42 @@ do_it:
  No_Unix:
  say stderr.1
  call done
+
+/* ------------------------------------------------------- *
+ | Get the MANPATH from /etc/profile and the user .profile |
+ | and add that to the Environment variable used for the   |
+ | man command.                                            |
+ * ------------------------------------------------------- */
+Get_MANPATH: Procedure Expose env.
+  env.0 = 1
+  env.1 = '_BPX_SHAREAS=YES'
+  x = bpxwunix('cat /etc/profile | grep MANPATH',,a.,b.,env.)
+  x = bpxwunix('cat .profile | grep MANPATH',,c.,d.,env.)
+
+  parse value '' with path null
+
+  do i = 1 to a.0
+    if left(a.i,6) = 'export' then
+    parse value a.i with . a.i
+    if pos('MANPATH',a.i) > 0 then do
+      parse value a.i with . 'MANPATH=' pathv
+      if left(pathv,9) = '$MANPATH:'
+      then path = path":"substr(pathv,10)
+      else if strip(pathv) /= null then
+      path = pathv
+    end
+  end
+
+  do i = 1 to c.0
+    if pos('MANPATH',c.i) > 0 then do
+      parse value c.i with . 'MANPATH=' pathv
+      if left(pathv,9) = '$MANPATH:'
+      then path = path":"substr(pathv,10)
+    end
+  end
+  env.0 = 2
+  env.2 = 'MANPATH='path
+  Return path
 
 /* --------------------  rexx procedure  -------------------- *
  * Name:      LoadISPF                                        *

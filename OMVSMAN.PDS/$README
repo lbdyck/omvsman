@@ -12,7 +12,9 @@ your SYSPROC or SYSEXEC allocations.
 
             This is done by using the command: man -k .
 
- To Enable MAN pages:
+* ******************** *
+* To Enable MAN pages: *
+* ******************** *
  Copy from EPH.SEPHSAMP(EPHWP00) to SYS1.PARMLIB and
  change the DSN=EPH.SEPHTAB to match your installations
  high level qualifier for these datasets on your sysres.

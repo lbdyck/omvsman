@@ -45,16 +45,8 @@ your SYSPROC or SYSEXEC allocations.
               - issues man -k string
             - alias Find
 
-*----------------------------------------------------------*
-*                       Important                          *
-*----------------------------------------------------------*
-If the zopen tools are installed then the man pages provided
-with it are in the UNIX format and not readable by the z/OS
-provided man command. To solve that the zopen tools includes
-a version named zotman. There is a zopen install option that
-will cause zotman to be installed as man but if that is not
-selected then the z/OS distributed man command will be the
-default.
-
-To get around this the OMVSMAN command checks for zotman and
-if it is found in the path then it will be used.
+IMPORTANT: If you are using the zopen community tools then
+           the man pages will *not* format with the IBM
+           provided man command (as of z/OS 3.2) which means
+           you need the zopen gman (part of the mandb package)
+           and OMVSMAN will detect that and use it.

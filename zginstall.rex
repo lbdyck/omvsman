@@ -41,6 +41,9 @@
   | Author:    Lionel B. Dyck                                  |
   |                                                            |
   | History:  (most recent on top)                             |
+  |            11/23/24 LBD - Check for NOCOZ DD               |
+  |            11/05/24 LBD - Correct ZGSTAT for 8 char userid |
+  |            09/28/24 LBD - Support 8 Char TSO Userid        |
   |            05/14/24 LBD - Fix binary find in .gitattributes|
   |            04/21/24 PJF - Support ascii to ebcdic tagging  |
   |            02/16/24 LBD - Correct 2 bad chars x'05'        |
@@ -78,7 +81,7 @@
   |            06/09/20 LBD - Creation from zigickot           |
   | ---------------------------------------------------------- |
   |    zigi - the z/OS ISPF Git Interface                      |
-  |    Copyright (C) 2020-2023 - Henri Kuiper and Lionel Dyck  |
+  |    Copyright (C) 2020-2024 - Henri Kuiper and Lionel Dyck  |
   |                                                            |
   |    This program is free software: you can redistribute it  |
   |    and/or modify it under the terms of the GNU General     |
@@ -149,11 +152,23 @@
   x = bpxwunix(cmd,,so.,se.,env.)
   ckotdir = strip(so.1)
 
-  x = bpxwunix('command -v putpds',,so.,se.)
-  if so.0 = 0 then enhanced = 0
+  rc = bpxwdyn('INFO DD(NOCOZ)')
+  if rc /= 0 then do
+     enhanced = 0
+     say ' '
+     say 'Using OMVS cp.'
+     say ' '
+    end
   else do
-    enhanced = 1
-    putpds = so.1
+    x = bpxwunix('command -v putpds',,so.,se.)
+    if so.0 = 0 then enhanced = 0
+    else do
+      enhanced = 1
+      putpds = so.1
+      say ' '
+      say 'Using Dovetail Co:Z Toolkit putpds.'
+      say ' '
+    end
   end
 
   /* -------------------------------------------------------------- *
@@ -476,6 +491,15 @@ zmsg:
   message = copies('-',63)
   say '* 'left(message,63)' *'
   return
+
+  /* ---------------------- *
+   | ISPF Stat Userid Setup |
+   * ---------------------- */
+zlmmuser: procedure
+   arg uid
+   if length(uid) > 7
+      then return 'user8('uid')'
+      else return 'user('uid')'
 
   /* ----------------------------------------------------- */
   /* number format code thanks to Doug Nadel               */
@@ -935,6 +959,7 @@ ChkIfGIT:
   | Author:    Lionel B. Dyck                                  |
   |                                                            |
   | History:  (most recent on top)                             |
+  |            11/05/24 LBD - Support 8 char userids           |
   |            06/11/20 LBD - Put inline in zginstall.rex      |
   |            06/10/20 LBD - Usability enhancements           |
   |            06/09/20 LBD - Creation                         |
@@ -1016,6 +1041,15 @@ Done:
   zedlmsg = 'ZGSTAT completed ISPF statistics updates.'
   'setmsg msg(isrz001)'
   exit 0
+
+  /* ---------------------- *
+   | ISPF Stat Userid Setup |
+   * ---------------------- */
+zlmmuser: procedure
+   arg uid
+   if length(uid) > 7
+      then return 'user8('uid')'
+      else return 'user('uid')'
 
 Cancel:
   x = dropispf(load_info)
@@ -1328,7 +1362,7 @@ zigistat:
         if sysrecfm /= 'U' then
         if zlcdate = null then
         if readonly = 0 then do
-          'LMMSTATS DATAID('status') Member('member') user('newuid')'
+          'LMMSTATS DATAID('status') Member('member')' zlmmuser(newuid)
           "LMMFind DATAID("status") Member("member") STATS(YES)"
         end
         /* ------------------------------ *
@@ -1425,12 +1459,13 @@ zigistat:
           if statmems /= null then
           if wordpos(member,statmems) = 0 then iterate
           if zlcdate = null then ,
-            'LMMSTATS DATAID('zstats') Member('member') user('sysvar(sysuid)')'
+            'LMMSTATS DATAID('zstats') Member('member')',
+             zlmmuser(sysvar(sysuid))
           else ,
             'LMMSTATS DATAID('zstats') MEMBER('member') VERSION('zlvers')' ,
             'MODLEVEL('zlmod') CREATED('zlcdate') MODDATE('zlmdate')' ,
             'MODTIME('zlmtime') INITSIZE('zlinorc')' ,
-            'MODRECS('zlmnorc') USER('zluser')'
+            'MODRECS('zlmnorc')' zlmmuser(zluser)
         end
         "LMClose Dataid("zstats")"
         "LMFree  Dataid("zstats")"
@@ -1570,9 +1605,9 @@ Update_Member_ISPF_Stats:
     parse value mem.actmem with cdt mdt mtm uid
     if uid /= null then
     'LMMSTATS DATAID('zstats') Member('actmem') Created('cdt')',
-           'Moddate('mdt') Modtime('mtm') User('uid')'
+           'Moddate('mdt') Modtime('mtm')' zlmmuser(uid)
     else
-    'LMMSTATS DATAID('zstats') Member('actmem') User('userid()')'
+    'LMMSTATS DATAID('zstats') Member('actmem')' zlmmuser(userid())
     "LMClose Dataid("zstats")"
     "LMFree  Dataid("zstats")"
    return

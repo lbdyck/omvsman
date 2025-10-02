@@ -45,3 +45,9 @@ your SYSPROC or SYSEXEC allocations.
               for the string in all man pages
               - issues man -k string
             - alias Find
+
+IMPORTANT: If you are using the zopen community tools then
+           the man pages will *not* format with the IBM
+           provided man command (as of z/OS 3.2) which means
+           you need the zopen gman (part of the mandb package)
+           and OMVSMAN will detect that and use it.
